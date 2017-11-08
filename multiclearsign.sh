@@ -195,11 +195,32 @@ function hasFileASignatureBlock() {
     return $EX_SOFTWARE
 }
 
+#
+# swaps in the new file for the existing file
+#
+# $1 ... new file
+# $2 ... old file, will be overwritten
+# return code ... $EX_OK on success, or the appropriate error code
+# stdout ... nothing
+#
+function swapNewFile() {
+    local newfile="$1"
+    local filepath="$2"
+    echoerr "Replacing $filepath with new file"
+    local thedir="$(dirname "$filepath")" || return
+    local copy="$(mktemp -p "$thedir")" || return
+    cat "$newfile" > "$copy" || return
+    mv "$copy" "$filepath"
+}
+
+
+
 filepath="$1"
 [[ -n "$filepath" ]] || {
     echoerr "Usage: $MYNAME [file]"
     exit "$EX_USAGE"
 }
+
 
 hasFileASignatureBlock "$filepath"
 ex="$?"
@@ -207,7 +228,7 @@ ex="$?"
 # short path: no signature found, just do normal clearsign
 [[ "$ex" -eq "$EX_NO" ]] && {
     "$GPG" --yes --clearsign --output "$TEMPFILEPATH3" "$filepath"
-    cat "$TEMPFILEPATH3" > "$filepath"
+    swapNewFile "$TEMPFILEPATH3" "$filepath"
     echo -n > "$TEMPFILEPATH3"
     exit "$?"
 }
@@ -284,4 +305,4 @@ ex="$?"
 }
 
 echoerr "Saving new file into $filepath"
-cat "$TEMPFILEPATH3" > "$filepath"
+swapNewFile "$TEMPFILEPATH3" "$filepath"
