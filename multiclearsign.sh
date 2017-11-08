@@ -111,28 +111,44 @@ function echoerr() {
 }
 
 
-# general purpose temporary files on disk
-# automatically freed by OS upon exit
-TEMPFILEPATH3="$(mktemp)"
-exec 3<>"${TEMPFILEPATH3}"
-rm -f "${TEMPFILEPATH3}"
-TEMPFILEPATH3="/proc/self/fd/3"
+## temporary files on disk
+## automatically freed by OS upon exit
 
-TEMPFILEPATH4="$(mktemp)"
-exec 4<>"${TEMPFILEPATH4}"
-rm -f "${TEMPFILEPATH4}"
-TEMPFILEPATH4="/proc/self/fd/4"
+# the unwrapped message
+TEMPMESSAGE="$(mktemp)"
+exec 3<>"${TEMPMESSAGE}"
+rm -f "${TEMPMESSAGE}"
+TEMPMESSAGE="/proc/self/fd/3"
 
-TEMPFILEPATH5="$(mktemp)"
-exec 5<>"${TEMPFILEPATH5}"
-rm -f "${TEMPFILEPATH5}"
-TEMPFILEPATH5="/proc/self/fd/5"
+# the newly produced second clearsigned file (wrapped message + pgp blocks)
+TEMPSECONDSIGNED="$(mktemp)"
+exec 4<>"${TEMPSECONDSIGNED}"
+rm -f "${TEMPSECONDSIGNED}"
+TEMPSECONDSIGNED="/proc/self/fd/4"
+
+# the existing signature packet(s), dearmored
+TEMPSIGNPACKET1="$(mktemp)"
+exec 5<>"${TEMPSIGNPACKET1}"
+rm -f "${TEMPSIGNPACKET1}"
+TEMPSIGNPACKET1="/proc/self/fd/5"
+
+# the new signature packet, dearmored
+TEMPSIGNPACKET2="$(mktemp)"
+exec 6<>"${TEMPSIGNPACKET2}"
+rm -f "${TEMPSIGNPACKET2}"
+TEMPSIGNPACKET2="/proc/self/fd/6"
+
+# the new wrapped message with pgp block (containing old and new packets)
+TEMPNEWFILE="$(mktemp)"
+exec 7<>"${TEMPNEWFILE}"
+rm -f "${TEMPNEWFILE}"
+TEMPNEWFILE="/proc/self/fd/7"
 
 
 ##
 ## test if the first argument is equal to any of the other arguments
 ## using with an array like this:
-##     StringEqualToAnyOf "$needle" "${haystack[@]}"
+##     stringIsEqualToAnyOf "$needle" "${haystack[@]}"
 ## the return value is $EX_YES if $needle is equal to any of the other strings,
 ## or $EX_NO otherwise.
 ##
@@ -140,9 +156,9 @@ TEMPFILEPATH5="/proc/self/fd/5"
 ## if also needle is missing the result is undefined.
 ##
 ## Synopsis:
-##     StringEqualToAnyOf NEEDLE [HAYSTACKELEMENT1] [HAYSTACKELEMENT2] ...
+##     stringIsEqualToAnyOf NEEDLE [HAYSTACKELEMENT1] [HAYSTACKELEMENT2] ...
 ##
-function StringEqualToAnyOf() {
+function stringIsEqualToAnyOf() {
     [[ "$#" -eq 0 ]] && {
         # no needle given
         echoerr "misuse of ${FUNCNAME[0]}: NEEDLE mssing."
@@ -172,7 +188,7 @@ GPG="$(which gpg2)" || {
     exit $EX_OSFILE
 }
 GPGSPLIT="$(which gpgsplit)" || {
-    echoerr "Missing util: gpg2"
+    echoerr "Missing util: gpgsplit"
     exit $EX_OSFILE
 }
 
@@ -184,6 +200,7 @@ GPGSPLIT="$(which gpgsplit)" || {
 # $1 ... the file to check
 # return code ... EX_YES if there is a block present, EX_NO if not. other
 #     codes if an error occurs
+# stdout ... nothing
 #
 function hasFileASignatureBlock() {
     local filepath="$1"
@@ -213,8 +230,6 @@ function swapNewFile() {
     mv "$copy" "$filepath"
 }
 
-
-
 filepath="$1"
 [[ -n "$filepath" ]] || {
     echoerr "Usage: $MYNAME [file]"
@@ -227,9 +242,8 @@ ex="$?"
 
 # short path: no signature found, just do normal clearsign
 [[ "$ex" -eq "$EX_NO" ]] && {
-    "$GPG" --yes --clearsign --output "$TEMPFILEPATH3" "$filepath"
-    swapNewFile "$TEMPFILEPATH3" "$filepath"
-    echo -n > "$TEMPFILEPATH3"
+    "$GPG" --yes --clearsign --output "$TEMPNEWFILE" "$filepath"
+    swapNewFile "$TEMPNEWFILE" "$filepath"
     exit "$?"
 }
 # some error occured
@@ -252,57 +266,49 @@ HASHALG=$(
     HASHALG="MD5"
 }
 
-StringEqualToAnyOf "$HASHALG" "MD5" "SHA1" "SHA256" "SHA512" || {
-    echoerr "Warning: Using Hash Algo: $HASHALG"
+stringIsEqualToAnyOf "$HASHALG" "MD5" "SHA1" "SHA256" "SHA512" || {
+    echoerr "Warning: Using unknown hash algo: $HASHALG"
 }
 
 
 
 # make a new signature of the document itself (without the existing signature)
-"$GPG" --yes --output "$TEMPFILEPATH3" --decrypt "$filepath" 2>/dev/null
-"$GPG" --yes --digest-algo "$HASHALG" --clearsign --output "$TEMPFILEPATH4" "$TEMPFILEPATH3"
-echo -n > "$TEMPFILEPATH3"
+"$GPG" --yes --output "$TEMPMESSAGE" --decrypt "$filepath" 2>/dev/null
+"$GPG" --yes --digest-algo "$HASHALG" --clearsign --output "$TEMPSECONDSIGNED" "$TEMPMESSAGE"
 
 
-# extract both signature packet from the respective openpgp blocks
+# extract both signature packets from the respective openpgp blocks
 sed -n '/^-----BEGIN PGP SIGNATURE-----$/,/^-----END PGP SIGNATURE-----$/ p' "$filepath" \
   | "$GPG" --dearmor \
   | "$GPGSPLIT" --no-split \
-  > "$TEMPFILEPATH3"
-sed -n '/^-----BEGIN PGP SIGNATURE-----$/,/^-----END PGP SIGNATURE-----$/ p' "$TEMPFILEPATH4" \
+  > "$TEMPSIGNPACKET1"
+sed -n '/^-----BEGIN PGP SIGNATURE-----$/,/^-----END PGP SIGNATURE-----$/ p' "$TEMPSECONDSIGNED" \
   | "$GPG" --dearmor \
   | "$GPGSPLIT" --no-split \
-  > "$TEMPFILEPATH5"
-echo -n > "$TEMPFILEPATH4"
-
-cat "$TEMPFILEPATH3" "$TEMPFILEPATH5" \
-  | "$GPG" --enarmor \
-  | sed -n -e '/^-----BEGIN PGP ARMORED FILE-----$/,/^$/ d' -e 'p' \
-  | sed -n -e '$ d' -e 'p' \
-  > "$TEMPFILEPATH4"
-echo -n > "$TEMPFILEPATH3"
-echo -n > "$TEMPFILEPATH5"
+  > "$TEMPSIGNPACKET2"
 
 
 (
     echo "-----BEGIN PGP SIGNED MESSAGE-----"
     echo "Hash: $HASHALG"
     echo
-    "$GPG" --yes --decrypt "$filepath" 2>/dev/null
+    cat "$TEMPMESSAGE"
     echo '-----BEGIN PGP SIGNATURE-----'
     echo "Version: $OPTPACKAGE $OPTVERSION"
     echo
-    cat "$TEMPFILEPATH4"
+    cat "$TEMPSIGNPACKET1" "$TEMPSIGNPACKET2" \
+        | "$GPG" --enarmor \
+        | sed -n -e '/^-----BEGIN PGP ARMORED FILE-----$/,/^$/ d' -e 'p' \
+        | sed -n -e '$ d' -e 'p'
     echo '-----END PGP SIGNATURE-----'
-) > "$TEMPFILEPATH3"
+) > "$TEMPNEWFILE"
 
 echoerr "The new files verifies as follows:"
-"$GPG" --verify "$TEMPFILEPATH3"
+"$GPG" --verify "$TEMPNEWFILE"
 ex="$?"
 [[ "$ex" -eq 0 ]] || {
     echoerr "ERROR: the new file did not verify, keeping the original."
     exit "$EX_SOFTWARE"
 }
 
-echoerr "Saving new file into $filepath"
-swapNewFile "$TEMPFILEPATH3" "$filepath"
+swapNewFile "$TEMPNEWFILE" "$filepath"
