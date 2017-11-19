@@ -83,7 +83,7 @@ EX_NOINPUT=66
 EX_NOUSER=67
 EX_NOHOST=68
 EX_UNAVAILABLE=69
-EX_SOFTWARE=70
+EX_SOFTWARE=70     # internal software error
 EX_OSERR=71
 EX_OSFILE=72
 EX_CANTCREAT=73
@@ -213,24 +213,177 @@ function hasFileASignatureBlock() {
 }
 
 #
+# either prints the result to stdout, or
 # swaps in the new file for the existing file
 #
-# $1 ... new file
-# $2 ... old file, will be overwritten
+# $1 ... file containing the result
+# $2 ... 0 if stdout or 1 if replace should be performed
+# $3 ... the argument filename, if replace
 # return code ... $EX_OK on success, or the appropriate error code
-# stdout ... nothing
+# stdout ... result will be printed, or nothing
 #
-function swapNewFile() {
-    local newfile="$1"
+function outputResult() {
+    local resultfile="$1"
+    local doreplace="$2"
     local filepath="$2"
-    echoerr "Replacing $filepath with new file"
-    local thedir="$(dirname "$filepath")" || return
-    local copy="$(mktemp -p "$thedir")" || return
-    cat "$newfile" > "$copy" || return
-    mv "$copy" "$filepath"
+    if [[ "${doreplace}" -eq 0 ]]; then
+        echoerr "writing result to stdout"
+        cat "$resultfile"
+    elif [[ "${doreplace}" -eq 1 ]]; then
+        echoerr "Replacing $filepath with new file"
+        local thedir="$(dirname "$filepath")" || return
+        local copy="$(mktemp -p "$thedir")" || return
+        cat "$resultfile" > "$copy" || return
+        mv "$copy" "$filepath"
+    else
+        echoerr "Error: internal error in outputResult"
+        exit "$EX_SOFTWARE"
+    fi
 }
 
-filepath="$1"
+
+##
+## default command line options
+##
+PARM_DOREPLACE=0
+PARM_FILE_ISSET=0
+PARM_FILE_VALUE=""
+
+
+##
+## help output
+##
+## stderr: the help
+##
+function printhelp() {
+    echoerr "NAME"
+    echoerr "    $OPTPACKAGE -- clearsign a file with multiple signatures"
+    echoerr ""
+    echoerr "SYNOPSIS"
+    echoerr "    ${MYNAME} [OPTIONS] [--] <FILE>"
+    echoerr ""
+    echoerr "SUMMARY"
+    echoerr ""
+    echoerr "  mimics \`gpg2 --clearsign <FILE>\`, but enables additional signatures"
+    echoerr "to be added not just one."
+    echoerr "By default, the signed result data is written to stdout."
+    echoerr ""
+    echoerr "  Note: The actual signing is done by \`gpg2\`."
+    echoerr ""
+    echoerr ""
+    echoerr "DEPENDENCIES:"
+    echoerr ""
+    echoerr "  bash4, gpg2, gpgsplit, sed, coreutils"
+    echoerr ""
+    echoerr ""
+    echoerr "OPTIONS:"
+    echoerr ""
+    echoerr "  -h --help  show this help and exit"
+    echoerr ""
+    echoerr "  --replace  instead of writing to stdout, FILE is replaced with the result"
+    echoerr "      (using a temporary file and rename(2) )"
+    echoerr ""
+    echoerr "  --  all following arguments are non-options"
+    echoerr ""
+    echoerr ""
+    echoerr "FILE:"
+    echoerr ""
+    echoerr "  The path to the file to be signed."
+    echoerr ""
+    echoerr ""
+    echoerr "SECURITY CONSIDERATIONS:"
+    echoerr ""
+    echoerr "  In absence of software-bugs, the security guarantees of gpg2 --clearsign"
+    echoerr "upheld."
+    echoerr ""
+    return $EX_OK
+}
+
+
+##
+## parse the given parameters as commandline
+##
+## parameters: the command line
+## effects: sets the global user-configureable variables
+##
+function parse_cmdline() {
+    [[ "$#" -eq 0 ]] && {
+        # print "error message" if no parameters given
+        printhelp
+        return $EX_USAGE
+    }
+
+    while [[ "$#" -gt 0 ]]
+    do
+        local key="$1"
+
+        case "$key" in
+
+            --help)
+                printhelp
+                return $EX_USAGE
+                ;;
+
+            --replace)
+                PARM_DOREPLACE="1"
+                ;;
+
+            # end of options
+            --)
+                break
+                ;;
+
+            # unknown options
+            --*)
+                logerror "unknown option: $key"
+                return $EX_USAGE
+                ;;
+
+            ## non-option is FILE
+            *)
+                # only one file supported atm
+                [[ "${PARM_FILE_ISSET}" -eq 0 ]] || {
+                    echoerr "Error: only one FILE supported"
+                    printhelp
+                    return $EX_USAGE
+                }
+                PARM_FILE_ISSET=1
+                PARM_FILE_VALUE="$key"
+                ;;
+        esac
+        shift
+    done
+
+    # if arguments are still left, they are non-options
+    [[ "$#" -gt 0 ]] && {
+        # TODO: this block is duplicate code from inside the switch above and
+        # should be undeuplicated sometime
+        local key="$1"
+        # only one file supported atm
+        [[ "${PARM_FILE_ISSET}" -eq 0 ]] || {
+            echoerr "Error: only one FILE supported"
+            printhelp
+            return $EX_USAGE
+        }
+        PARM_FILE_ISSET=1
+        PARM_FILE_VALUE="$key"
+    }
+
+    # if no file given, display help
+    [[ "${PARM_FILE_ISSET}" -eq 0 ]] && {
+        echoerr "Error: missing FILE argument"
+        printhelp
+        return $EX_USAGE
+    }
+
+    return $EX_OK
+}
+
+
+
+parse_cmdline
+
+filepath="$PARM_FILE_VALUE"
 [[ -n "$filepath" ]] || {
     echoerr "Usage: $MYNAME [file]"
     exit "$EX_USAGE"
@@ -243,7 +396,7 @@ ex="$?"
 # short path: no signature found, just do normal clearsign
 [[ "$ex" -eq "$EX_NO" ]] && {
     "$GPG" --yes --clearsign --output "$TEMPNEWFILE" "$filepath"
-    swapNewFile "$TEMPNEWFILE" "$filepath"
+    outputResult "$TEMPNEWFILE" "$PARM_DOREPLACE" "$PARM_FILE_VALUE"
     exit "$?"
 }
 # some error occured
@@ -311,4 +464,4 @@ ex="$?"
     exit "$EX_SOFTWARE"
 }
 
-swapNewFile "$TEMPNEWFILE" "$filepath"
+outputResult "$TEMPNEWFILE" "$PARM_DOREPLACE" "$PARM_FILE_VALUE"
