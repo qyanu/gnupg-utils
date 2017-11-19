@@ -26,6 +26,9 @@
 ################################## CHANGELOG ##################################
 ###############################################################################
 
+# 2017-11-20 <max-julian@pogner.at>  corrections suggested by, and improvements
+#     discussed with Andreas Hubert <andreas@hubert.digital> and
+#     Christian Amsüss <chrysn@amsuess.com>
 # 2017-11-07 <max-julian@pogner.at>  initial file creation
 
 
@@ -46,7 +49,7 @@ umask 077
 ## common and global variables
 ##
 MYNAME="$0"
-OPTPACKAGE="multiclearsign"
+OPTPACKAGE="gpg-multiclearsign"
 OPTVERSION="0.1"
 MYDIR="$(dirname "$0")"
 
