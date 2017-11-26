@@ -312,6 +312,7 @@ function printhelp() {
 function parse_cmdline() {
     [[ "$#" -eq 0 ]] && {
         # print "error message" if no parameters given
+        echoerr "Error: parameters required"
         printhelp
         return $EX_USAGE
     }
@@ -384,7 +385,7 @@ function parse_cmdline() {
 
 
 
-parse_cmdline
+parse_cmdline "$@"
 
 filepath="$PARM_FILE_VALUE"
 [[ -n "$filepath" ]] || {
